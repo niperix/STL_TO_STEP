@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+  <meta charset="UTF-8" />
+  <title>STL ➜ STEP Konvertor (OpenCascade.js, single HTML)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #020817;
+      color: #e5e7eb;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #020817;
+      padding: 24px 24px 18px;
+      border-radius: 18px;
+      width: 100%;
+      max-width: 480px;
+      box-shadow: 0 20px 60px rgba(15,23,42,0.7);
+      border: 1px solid rgba(129,140,248,0.22);
+    }
+    h1 {
+      font-size: 20px;
+      margin: 0 0 6px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    h1 span.logo-box {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      box-sizing: border-box;
+      border: 2px solid #020817;
+      background:
+        linear-gradient(#020817,#020817) content-box,
+        linear-gradient(135deg,#3b82f6,#020817 52%,#ef4444) border-box;
+    }
+    p.subtitle {
+      margin: 0 0 18px;
+      font-size: 13px;
+      color: #9ca3af;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 6px;
+      color: #9ca3af;
+    }
+    .dropzone {
+      border: 1px dashed #4b5563;
+      border-radius: 12px;
+      padding: 18px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      font-size: 13px;
+      color: #9ca3af;
+      margin-bottom: 14px;
+    }
+    .dropzone:hover {
+      border-color: #818cf8;
+      background: rgba(79,70,229,0.04);
+      color: #e5e7eb;
+    }
+    input[type="file"] { display: none; }
+    button {
+      width: 100%;
+      padding: 10px 14px;
+      border: none;
+      border-radius: 999px;
+      background: linear-gradient(90deg,#4f46e5,#7c3aed);
+      color: white;
+      font-weight: 500;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: transform 0.14s ease, box-shadow 0.14s ease, opacity 0.14s ease;
+    }
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 24px rgba(79,70,229,0.38);
+    }
+    button:disabled {
+      opacity: 0.4;
+      cursor: default;
+      box-shadow: none;
+      transform: none;
+    }
+    .status {
+      margin-top: 8px;
+      min-height: 18px;
+      font-size: 11px;
+      color: #9ca3af;
+    }
+    .status.error { color: #fb923c; }
+    .status.ok { color: #22c55e; }
+    .hint {
+      margin-top: 4px;
+      font-size: 10px;
+      color: #6b7280;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, "SF Mono", monospace;
+      font-size: 10px;
+      background: #020817;
+      padding: 2px 5px;
+      border-radius: 5px;
+      color: #9ca3af;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>
+      <span class="logo-box"></span>
+      STL ➜ STEP Konvertor
+    </h1>
+    <p class="subtitle">
+      Single HTML. Všetko beží v prehliadači, jadro sa načíta z CDN (OpenCascade.js build so STL+STEP).
+    </p>
+
+    <label>1. Vyber .stl súbor</label>
+    <div id="dropzone" class="dropzone">
+      Klikni alebo pretiahni STL sem
+    </div>
+    <input id="fileInput" type="file" accept=".stl" />
+
+    <button id="convertBtn" disabled>
+      <span>2. Konvertovať na STEP</span>
+      <span id="btnIcon">⬇️</span>
+    </button>
+
+    <div id="status" class="status"></div>
+    <div class="hint">
+      Odporúčané spustenie: <code>python -m http.server</code> a otvoriť cez <code>http://localhost:8000</code>.
+      Súbor používa OpenCascade.js z CDN, ktorý musí byť buildnutý s modulmi STL a STEP.
+    </div>
+  </div>
+
+  <script type="module">
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("fileInput");
+    const convertBtn = document.getElementById("convertBtn");
+    const statusEl = document.getElementById("status");
+    const btnIcon = document.getElementById("btnIcon");
+
+    let selectedFile = null;
+    let oc = null;
+
+    function setStatus(msg, type = "") {
+      statusEl.textContent = msg || "";
+      statusEl.className = "status" + (type ? " " + type : "");
+    }
+
+    // URL na OpenCascade.js build s podporou STL/STEP.
+    // Tento URL je príklad; pre produkciu odporúčam vlastný build podľa ocjs.org.
+    const occJsUrl   = "https://unpkg.com/opencascade.js@beta/dist/opencascade.full.js";
+    const occWasmUrl = "https://unpkg.com/opencascade.js@beta/dist/opencascade.full.wasm";
+
+    (async () => {
+      try {
+        const module = await import(/* @vite-ignore */ occJsUrl);
+        const initOpenCascade = module.default || module.opencascade || module;
+        oc = await initOpenCascade({
+          locateFile: (file) => occWasmUrl.replace("opencascade.full.wasm", file),
+        });
+
+        if (!oc.StlAPI_Reader || !oc.STEPControl_Writer_1) {
+          setStatus("Načítalo sa CAD jadro, ale tento build nemá STL/STEP moduly. Treba build s TKSTL+TKSTEP.", "error");
+          console.warn("Chýba StlAPI_Reader alebo STEPControl_Writer_1 v tomto builde.");
+          return;
+        }
+
+        setStatus("CAD jadro pripravené. Nahoď STL.", "ok");
+        if (selectedFile) convertBtn.disabled = false;
+      } catch (e) {
+        console.error(e);
+        setStatus("Chyba: nepodarilo sa načítať CAD jadro.", "error");
+      }
+    })();
+
+    dropzone.addEventListener("click", () => fileInput.click());
+    dropzone.addEventListener("dragover", e => {
+      e.preventDefault();
+      dropzone.style.borderColor = "#818cf8";
+      dropzone.style.background = "rgba(79,70,229,0.06)";
+      dropzone.textContent = "Pusti na konverziu…";
+    });
+    dropzone.addEventListener("dragleave", () => {
+      dropzone.style.borderColor = "#4b5563";
+      dropzone.style.background = "transparent";
+      dropzone.textContent = selectedFile ? selectedFile.name : "Klikni alebo pretiahni STL sem";
+    });
+    dropzone.addEventListener("drop", e => {
+      e.preventDefault();
+      handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener("change", e => {
+      handleFile(e.target.files[0]);
+    });
+
+    function handleFile(file) {
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith(".stl")) {
+        setStatus("Prosím, nahraj .stl súbor.", "error");
+        convertBtn.disabled = true;
+        selectedFile = null;
+        dropzone.textContent = "Klikni alebo pretiahni STL sem";
+        return;
+      }
+      selectedFile = file;
+      dropzone.textContent = file.name;
+      if (!oc) {
+        setStatus("Súbor OK. Čakám na načítanie CAD jadra…", "");
+        convertBtn.disabled = true;
+      } else {
+        setStatus("Súbor pripravený, môžeš konvertovať.", "ok");
+        convertBtn.disabled = false;
+      }
+    }
+
+    convertBtn.addEventListener("click", async () => {
+      if (!selectedFile) return;
+      if (!oc) {
+        setStatus("CAD jadro nie je pripravené.", "error");
+        return;
+      }
+      if (!oc.StlAPI_Reader || !oc.STEPControl_Writer_1) {
+        setStatus("Tento OpenCascade.js build nepodporuje STL/STEP (treba build s príslušnými modulmi).", "error");
+        return;
+      }
+
+      convertBtn.disabled = true;
+      btnIcon.textContent = "⏳";
+      setStatus("Konvertujem v prehliadači…", "");
+
+      try {
+        const buf = await selectedFile.arrayBuffer();
+        const data = new Uint8Array(buf);
+
+        const stlName = "/input.stl";
+        const stepName = "/output.step";
+
+        try { if (oc.FS.analyzePath(stlName).exists) oc.FS.unlink(stlName); } catch {}
+        try { if (oc.FS.analyzePath(stepName).exists) oc.FS.unlink(stepName); } catch {}
+
+        oc.FS.createDataFile("/", "input.stl", data, true, true);
+
+        // 1) STL -> TopoDS_Shape
+        const shape = new oc.TopoDS_Shape();
+        const stlReader = new oc.StlAPI_Reader();
+        const ok = stlReader.Read(shape, stlName);
+        if (!ok) {
+          throw new Error("Nepodarilo sa načítať STL cez StlAPI_Reader.");
+        }
+
+        // 2) STEP writer
+        const writer = new oc.STEPControl_Writer_1();
+        const progress = new oc.Message_ProgressRange_1();
+
+        writer.Transfer(
+          shape,
+          oc.STEPControl_StepModelType.STEPControl_AsIs,
+          true,
+          progress
+        );
+
+        const writeStatus = writer.Write(stepName);
+        if (writeStatus !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) {
+          throw new Error("STEPControl_Writer zlyhal.");
+        }
+
+        // 3) Download STEP
+        const stepData = oc.FS.readFile(stepName);
+        const blob = new Blob([stepData], { type: "application/octet-stream" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = selectedFile.name.replace(/\.stl$/i, ".step");
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        setStatus("Hotovo. STEP stiahnutý.", "ok");
+      } catch (err) {
+        console.error(err);
+        setStatus("Chyba: " + err.message, "error");
+      } finally {
+        convertBtn.disabled = !!selectedFile && !!oc;
+        btnIcon.textContent = "⬇️";
+      }
+    });
+  </script>
+</body>
+</html>
